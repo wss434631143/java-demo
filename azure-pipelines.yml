@@ -1,0 +1,139 @@
+parameters:
+  - name: replicas
+    displayName: 副本数
+    type: number
+    default: 1
+
+variables:
+  dockerRegistryServiceConnection: 'ferrero-o2o-demo-acr'
+  kubernetesServiceConnection: 'ferrero-o2o-demo-aks'
+  containerRegistry: 'cne2ferrerocmppocacr01.azurecr.cn'
+  imageRepository: 'o2o/java-demo'
+  namespace: 'ferrero-o2o-demo'
+  tag: '$(Build.BuildId)'
+  dockerfilePath: '**/Dockerfile'
+  imagePullSecret: 'acr-secret'
+  manifests: 'deploy.yaml'
+  appname: 'java-demo'
+  appport: '8000'
+
+trigger:
+  - none
+
+pool:
+  name: "Azure Pipelines"
+
+stages:
+- stage: CI
+  displayName: CI
+  jobs:
+  - job: Checkout
+    displayName: Checkout Code
+    steps:
+    - checkout: self
+      clean: true
+      
+  - job: Bulid
+    displayName: Bulid Image
+    dependsOn: Checkout
+    steps:
+    - task: Maven@3
+      inputs:
+        mavenPomFile: 'pom.xml'
+        options: '-Dmaven.test.skip=true'
+        publishJUnitResults: false
+        javaHomeOption: 'JDKVersion'
+        mavenVersionOption: 'Default'
+        mavenAuthenticateFeed: false
+        effectivePomSkip: false
+        sonarQubeRunAnalysis: false
+    - task: Docker@2
+      displayName: Login to ACR
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        command: 'login'
+    - bash: |
+        pwd;ls
+      displayName: Show directory and file
+    - task: Docker@2
+      displayName: Build and push an image to ACR
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: $(imageRepository)
+        command: 'buildAndPush'
+        Dockerfile: '$(dockerfilePath)'
+        tags: $(tag)
+    - task: Docker@2
+      displayName: Logout to ACR
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        command: 'logout'
+
+- stage: CD
+  displayName: CD
+  dependsOn: CI
+
+  jobs:
+  - job: CreateNamespace
+    displayName: Create Namespace
+    steps:
+    - task: Kubernetes@1
+      displayName: Create Namespace
+      inputs:
+        connectionType: 'Kubernetes Service Connection'
+        kubernetesServiceEndpoint: 'ferrero-o2o-demo-aks'
+        command: 'apply'
+        useConfigurationFile: true
+        configurationType: 'inline'
+        inline: '{ "kind": "Namespace", "apiVersion": "v1", "metadata": { "name": "$(namespace)" }}'
+
+  - job: CreateSecret
+    displayName: Create imagePull Secret
+    dependsOn: CreateNamespace
+    steps:
+    - task: KubernetesManifest@0
+      displayName: Create Secret
+      inputs:
+        action: 'createSecret'
+        kubernetesServiceConnection: $(kubernetesServiceConnection)
+        namespace: '$(namespace)'
+        secretType: 'dockerRegistry'
+        secretName: '$(imagePullSecret)'
+        dockerRegistryEndpoint: '$(dockerRegistryServiceConnection)'
+
+  - job: DeployTOAKS
+    displayName: Deploy to AKS
+    dependsOn: CreateSecret
+    steps:
+    - bash: |
+        sed -i 's#{replicas}#${{parameters.replicas}}#g' $(manifests)
+        sed -i 's#{appname}#$(appname)#g' $(manifests)
+        sed -i 's#{appport}#$(appport)#g' $(manifests)
+        sed -i 's#{tag}#$(tag)#g' $(manifests)
+        cat $(manifests)
+      displayName: Change and Cat $(manifests)
+    - task: KubernetesManifest@0
+      displayName: Deploy to AKS
+      inputs:
+        action: 'deploy'
+        kubernetesServiceConnection: $(kubernetesServiceConnection)
+        namespace: '$(namespace)'
+        manifests: '$(manifests)'
+        containers: $(containerRegistry)/$(imageRepository):$(tag)
+        imagePullSecrets: '$(imagePullSecret)'
+
+  - job: Getservices
+    displayName: Get Services
+    dependsOn: DeployTOAKS
+    steps:
+    - task: Kubernetes@1
+      name: getservices
+      displayName: Get Services
+      continueOnError: true
+      inputs:
+        connectionType: 'Kubernetes Service Connection'
+        kubernetesServiceEndpoint: 'ferrero-o2o-demo-aks'
+        command: get
+        namespace: $(namespace)
+        arguments: svc
+        #outputFormat: jsonpath='http://{.items[0].status.loadBalancer.ingress[0].ip}:{.items[0].spec.ports[0].port}'

@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: eureka
+server:
+  port: 8000
+eureka:
+  instance:
+    #Eureka Server实例是本机
+    hostname: localhost
+  client:
+    #由于我们只搭建单台Eureka Server,不需要多台Server之间的
+    #由于注册信息同步,因此fetch-registry设置为false
+    fetch-registry: false
+    #由于本模块自身就是Eureka Server,且是单台,不需要把自己
+    #注册到Eureka Server,因此设置为false
+    register-with-eureka: false
+    #本eureka Server对外提供注册、发现服务的地址
+    service-url:
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/

@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {appname}
+spec:
+  replicas: {replicas}
+  selector:
+    matchLabels:
+      name: {appname}
+  template:
+    metadata:
+      labels:
+        name: {appname}
+    spec:
+      containers:
+        - name: {appname}
+          image: cne2ferrerocmppocacr01.azurecr.cn/o2o/{appname}:{tag}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {appport}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {appname}
+spec:
+  ports:
+    - port: {appport}
+      targetPort: {appport}
+      protocol: TCP
+  type: NodePort
+  selector:
+    name: {appname}
